@@ -59,7 +59,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader
 from torchvision.models import resnet18, resnet50
 
-# import ipdb
+import ipdb
 from tqdm import tqdm
 
 # Load various PaI methods (Rand, Mag, SNIP, GraSP, SynFlow)
@@ -296,10 +296,9 @@ class BaseSupervisedMethod(pl.LightningModule):
             download=False,
             )
 
-        device = torch.device("cuda:4")
+        device = torch.device("cuda:7")
         # Perform all the gradient calculation here (if necessary!)
         if self.pruner.lower() == "snip":
-            # ipdb.set_trace()
             ## Compute gradient
             for data, target in tqdm(train_loader, desc="SNIP loss calculation"):
                 data, target = data.to(device), target.to(device)
@@ -308,7 +307,6 @@ class BaseSupervisedMethod(pl.LightningModule):
                 loss = F.cross_entropy(output, target)
                 loss.backward()
             ## Calculate Score
-            # ipdb.set_trace()
             for name1, module in (self.backbone.named_modules()):
                 if isinstance(module, (nn.Conv2d, nn.Linear)):
                     for name2, param in (module.named_parameters(recurse=False)):
@@ -322,6 +320,7 @@ class BaseSupervisedMethod(pl.LightningModule):
                         key = name1 + '.' + name2
                         # Set gradients to zero
                         param.grad.data.zero_()
+
             # Normalize the gradients
             all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
             norm = torch.sum(all_scores)
@@ -329,7 +328,52 @@ class BaseSupervisedMethod(pl.LightningModule):
                 self.pruning_mask[keys].div_(norm)
 
         elif self.pruner.lower() == "grasp":
-            pass
+            temp, eps = 200, 1e-10
+            # First, evaluate gradient vector without computational graph
+            stopped_grads = 0
+            for data, target in tqdm(train_loader, desc="GraSP 1st loss calculation"):
+                data, target = data.to(device), target.to(device)
+                self.backbone.to(device)
+                output = self.backbone(data) / temp
+                L = F.cross_entropy(output, target)
+                
+                grads = torch.autograd.grad(L, [param for _, param in self.backbone.named_parameters()], create_graph=False)
+                flatten_grads = torch.cat([g.reshape(-1) for g in grads if g is not None])
+                stopped_grads += flatten_grads
+
+            # Next, evaluate gradient vector with computational graph
+            for data, target in tqdm(train_loader, desc="GraSP 2nd loss calculation"):
+                data, target = data.to(device), target.to(device)
+                self.backbone.to(device)
+                output = self.backbone(data) / temp
+                L = F.cross_entropy(output, target)
+
+                grads = torch.autograd.grad(L, [param for _, param in self.backbone.named_parameters()], create_graph=True)
+                flatten_grads = torch.cat([g.reshape(-1) for g in grads if g is not None])
+
+                gnorm = (stopped_grads * flatten_grads).sum()
+                gnorm.backward()
+
+            # Calculate the score
+            for name1, module in (self.backbone.named_modules()):
+                if isinstance(module, (nn.Conv2d, nn.Linear)):
+                    for name2, param in (module.named_parameters(recurse=False)):
+                        key = name1 + '.' + name2
+                        # Assign scores to the respective parameters here
+                        self.pruning_mask[key] = torch.clone(param.grad.cpu() * param.cpu()).detach()
+                        # Set gradients to zero
+                        param.grad.data.zero_()
+                else:
+                    for name2, param in (module.named_parameters(recurse=False)):
+                        param.grad.data.zero_()
+
+            # Normalize the gradients
+            all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
+            norm = torch.sum(all_scores)
+            for keys in self.pruning_mask.keys():
+                self.pruning_mask[keys].div_(norm)
+            ipdb.set_trace()
+
         elif self.pruner.lower() == "synflow":
             pass
         elif self.pruner.lower() in ["rand","mag"]:
