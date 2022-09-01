@@ -249,6 +249,70 @@ class BaseMethod(pl.LightningModule):
 
         self.classifier = nn.Linear(self.features_dim, num_classes)
 
+        # Perform PaI right here
+        # Iterate through parameters within the network.
+        """
+        There are two possible ways to iterate thorughout the network and check its prunability: 
+        (1) First way is by referring the specific layer name and its parameter with named_parameters() and check the parameter names with it.
+        i=0
+        for name, p in resnet18().named_parameters():
+            print('{} {}: {}'.format(i,name,p.shape))
+            i+=1
+        (2) Second way is by referring directly to the parameters with named_modules() and check if they're prunable
+        i=0
+        for name, module in (resnet18().named_modules()):
+            if isinstance(module,(nn.Conv2d, nn.Linear)):
+                print(i,module)
+                i+=1
+        We proceed with the first step
+        """
+        # Iterate through modules in backbone
+        pruning_mask = {}
+        sparsity = 0.1
+        for name1, module in (self.backbone.named_modules()):
+            ## Proceed if the module within this specific network is prunable (conv2d, linear)
+            if isinstance(module, (nn.Conv2d, nn.Linear)):
+                ## Iterate through paramaters in prunable modules.
+                for name2, param in module.named_parameters(recurse=False):
+                    # Create masks for each one of them
+                    key = name1 + '.' + name2
+                    pruning_mask[key] = param
+                ## Now that we successfully masked each one of them, it's time to score parameters
+                ## Iterate through the prunable layers within the network
+                for name in pruning_mask:
+                    ## Perform scoring onto parameters within the network
+                    ## (1) This one is for random pruning
+                    pruning_mask[name] = torch.randn_like(pruning_mask[name])
+                    ## (2) This one is for magnitude pruning
+                    ## TODO next: Put together all pruning methods here (SNIP, GraSP, SynFlow)
+                # Now, perform thresholding towards the parameters' score.
+                for mask in pruning_mask:
+                    ## This is for layer-wise pruning
+                    score = pruning_mask[mask]
+                    ## This one is for global pruning
+                    # score = torch.cat([torch.flatten(pruning_mask[v]) for v in pruning_mask])
+                    ## Lets do layer-wise pruning for the time-being
+                    k = int((1.0 - sparsity) * score.numel())
+                    if not k < 1:
+                        ## Perform thresholding under the sane case
+                        threshold, _ = torch.kthvalue(torch.flatten(score), k)
+                        ## Now, set parameters to be pruned and one that should be left as it is
+                        zero = torch.tensor([0.])
+                        one = torch.tensor([1.])
+                        pruning_mask[mask] = torch.where(score <= threshold, zero, one)
+                        print("PRUNING MASK GENERATED!! YEAY!")
+        ## Apply the mask right here for pruning
+        nonzero_elem, elem = 0
+        for module_name, param in self.backbone.named_parameters():
+            if module_name in pruning_mask.keys():
+                elem += torch.numel(param)
+                print("Total number of parameters BEFORE PRUNING: {}".format(elem))
+                param = pruning_mask[module_name] * param
+                nonzero_elem += torch.count_nonzero(param).item()
+                print("Total number of parameters AFTER PRUNING: {}".format(nonzero_elem))
+        ## Sanity check (if pruning really works or not!)
+        print("Ratio AFTER to BEFORE pruning: {}".format(nonzero_elem/elem))
+        
         if self.knn_eval:
             self.knn = WeightedKNNClassifier(k=self.knn_k, distance_fx="euclidean")
 

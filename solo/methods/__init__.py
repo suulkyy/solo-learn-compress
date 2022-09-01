@@ -19,6 +19,7 @@
 
 from solo.methods.barlow_twins import BarlowTwins
 from solo.methods.base import BaseMethod
+from solo.methods.basesupervised import BaseSupervisedMethod
 from solo.methods.byol import BYOL
 from solo.methods.deepclusterv2 import DeepClusterV2
 from solo.methods.dino import DINO
@@ -35,10 +36,13 @@ from solo.methods.swav import SwAV
 from solo.methods.vibcreg import VIbCReg
 from solo.methods.vicreg import VICReg
 from solo.methods.wmse import WMSE
+from solo.methods.simclrsupervised import SimCLRSupervised
+
 
 METHODS = {
     # base classes
     "base": BaseMethod,
+    "basesupervised": BaseSupervisedMethod,
     "linear": LinearModel,
     # methods
     "barlow_twins": BarlowTwins,
@@ -51,6 +55,7 @@ METHODS = {
     "nnsiam": NNSiam,
     "ressl": ReSSL,
     "simclr": SimCLR,
+    "simclrsupervised": SimCLRSupervised,
     "simsiam": SimSiam,
     "supcon": SupCon,
     "swav": SwAV,
@@ -62,6 +67,7 @@ __all__ = [
     "BarlowTwins",
     "BYOL",
     "BaseMethod",
+    "BaseSupervisedMethod",
     "DeepClusterV2",
     "DINO",
     "LinearModel",
@@ -71,6 +77,7 @@ __all__ = [
     "NNSiam",
     "ReSSL",
     "SimCLR",
+    "SimCLRSupervised",
     "SimSiam",
     "SupCon",
     "SwAV",
