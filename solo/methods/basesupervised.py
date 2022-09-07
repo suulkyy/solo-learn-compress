@@ -269,7 +269,7 @@ class BaseSupervisedMethod(pl.LightningModule):
 
         self.classifier = nn.Linear(self.features_dim, num_classes)
 
-        if self.pruner.lower != "none":
+        if self.pruner.lower() != "none":
             # Input the pruning modules and schedules here
             ## PUT THE PRUNING MODULES HERE
 
