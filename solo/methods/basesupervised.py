@@ -17,6 +17,8 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+from ast import Pass
+from copy import deepcopy
 from multiprocessing.spawn import prepare
 import warnings
 from argparse import ArgumentParser
@@ -59,8 +61,10 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader
 from torchvision.models import resnet18, resnet50
 
+# Inserted modules originally not in the base code
 import ipdb
 from tqdm import tqdm
+from copy import deepcopy
 
 # Load various PaI methods (Rand, Mag, SNIP, GraSP, SynFlow)
 ## Import this later when everything works like a charm!
@@ -128,6 +132,7 @@ class BaseSupervisedMethod(pl.LightningModule):
         knn_k: int = 20,
         sparsity: float = 0.1,
         pruner: str = "none",
+        scope: str = "global",
         **kwargs,
     ):
         """Base model that implements all basic operations for all self-supervised methods.
@@ -221,6 +226,7 @@ class BaseSupervisedMethod(pl.LightningModule):
         self.pruning_mask = {}
         self.sparsity = sparsity
         self.pruner = pruner
+        self.scope = scope
 
         # multicrop
         self.num_crops = self.num_large_crops + self.num_small_crops
@@ -265,156 +271,251 @@ class BaseSupervisedMethod(pl.LightningModule):
 
         self.classifier = nn.Linear(self.features_dim, num_classes)
 
-        # Input the pruning modules and schedules here
-        ## PUT THE PRUNING MODULES HERE
+        if self.pruner.lower != "none":
+            # Input the pruning modules and schedules here
+            ## PUT THE PRUNING MODULES HERE
 
-        # Perform PaI right here
-        # Iterate through parameters within the network.
-        """
-        There are two possible ways to iterate thorughout the network and check its prunability: 
-        (1) First way is by referring the specific layer name and its parameter with named_parameters() and check the parameter names with it.
-        i=0
-        for name, p in resnet18().named_parameters():
-            print('{} {}: {}'.format(i,name,p.shape))
-            i+=1
-        (2) Second way is by referring directly to the parameters with named_modules() and check if they're prunable
-        i=0
-        for name, module in (resnet18().named_modules()):
-            if isinstance(module,(nn.Conv2d, nn.Linear)):
-                print(i,module)
+            # Perform PaI right here
+            # Iterate through parameters within the network.
+            """
+            There are two possible ways to iterate thorughout the network and check its prunability: 
+            (1) First way is by referring the specific layer name and its parameter with named_parameters() and check the parameter names with it.
+            i=0
+            for name, p in resnet18().named_parameters():
+                print('{} {}: {}'.format(i,name,p.shape))
                 i+=1
-        We proceed with the first step
-        """
+            (2) Second way is by referring directly to the parameters with named_modules() and check if they're prunable
+            i=0
+            for name, module in (resnet18().named_modules()):
+                if isinstance(module,(nn.Conv2d, nn.Linear)):
+                    print(i,module)
+                    i+=1
+            We proceed with the first step
+            """
+            # Dataloader initialization (the one for gradient-based methods!)
+            train_loader, val_loader = prepare_data_classification(
+                dataset="cifar100",
+                # data_dir="~/workspace/datasets/"
+                train_dir="../../../datasets/cifar100/train",
+                val_dir="../../../datasets/cifar100/val",
+                batch_size=256,
+                download=False,
+                )
+            device = torch.device("cuda:1")
+            self.backbone.eval()
+            # Perform all the gradient calculation here (if necessary!)
+            if self.pruner.lower() == "snip":
+                ## Compute gradient
+                for data, target in tqdm(train_loader, desc="SNIP loss calculation"):
+                    data, target = data.to(device), target.to(device)
+                    self.backbone.to(device)
+                    output = self.backbone(data)
+                    loss = F.cross_entropy(output, target)
+                    loss.backward()
+                ## Calculate Score
+                for name1, module in (self.backbone.named_modules()):
+                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                        for name2, param in (module.named_parameters(recurse=False)):
+                            key = name1 + '.' + name2
+                            # Assign scores to the respective parameters here
+                            self.pruning_mask[key] = torch.clone(param.grad.cpu()).detach().abs_()           
+                            # Set gradients to zero
+                            param.grad.data.zero_()
+                    else:
+                        for name2, param in (module.named_parameters(recurse=False)):
+                            key = name1 + '.' + name2
+                            # Set gradients to zero
+                            param.grad.data.zero_()
 
-        # Dataloader initialization (the one for gradient-based methods!)
-        train_loader, val_loader = prepare_data_classification(
-            dataset="cifar100",
-            # data_dir="~/workspace/datasets/"
-            train_dir="../../../datasets/cifar100/train",
-            val_dir="../../../datasets/cifar100/val",
-            batch_size=256,
-            download=False,
-            )
+                # Normalize the gradients
+                all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
+                norm = torch.sum(all_scores)
+                for keys in self.pruning_mask.keys():
+                    self.pruning_mask[keys].div_(norm)
 
-        device = torch.device("cuda:7")
-        # Perform all the gradient calculation here (if necessary!)
-        if self.pruner.lower() == "snip":
-            ## Compute gradient
-            for data, target in tqdm(train_loader, desc="SNIP loss calculation"):
-                data, target = data.to(device), target.to(device)
-                self.backbone.to(device)
-                output = self.backbone(data)
-                loss = F.cross_entropy(output, target)
-                loss.backward()
-            ## Calculate Score
-            for name1, module in (self.backbone.named_modules()):
-                if isinstance(module, (nn.Conv2d, nn.Linear)):
-                    for name2, param in (module.named_parameters(recurse=False)):
-                        key = name1 + '.' + name2
-                        # Assign scores to the respective parameters here
-                        self.pruning_mask[key] = torch.clone(param.grad.cpu()).detach().abs_()           
-                        # Set gradients to zero
-                        param.grad.data.zero_()
-                else:
-                    for name2, param in (module.named_parameters(recurse=False)):
-                        key = name1 + '.' + name2
-                        # Set gradients to zero
-                        param.grad.data.zero_()
+            elif self.pruner.lower() == "grasp":
+                temp, eps = 200, 1e-10
+                # First, evaluate gradient vector without computational graph
+                stopped_grads = 0
+                for data, target in tqdm(train_loader, desc="GraSP 1st loss calculation"):
+                    data, target = data.to(device), target.to(device)
+                    self.backbone.to(device)
+                    output = self.backbone(data) / temp
+                    L = F.cross_entropy(output, target)
+                    
+                    grads = torch.autograd.grad(L, [param for _, param in self.backbone.named_parameters()], create_graph=False)
+                    flatten_grads = torch.cat([g.reshape(-1) for g in grads if g is not None])
+                    stopped_grads += flatten_grads
 
-            # Normalize the gradients
-            all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
-            norm = torch.sum(all_scores)
-            for keys in self.pruning_mask.keys():
-                self.pruning_mask[keys].div_(norm)
+                # Next, evaluate gradient vector with computational graph
+                for data, target in tqdm(train_loader, desc="GraSP 2nd loss calculation"):
+                    data, target = data.to(device), target.to(device)
+                    self.backbone.to(device)
+                    output = self.backbone(data) / temp
+                    L = F.cross_entropy(output, target)
 
-        elif self.pruner.lower() == "grasp":
-            temp, eps = 200, 1e-10
-            # First, evaluate gradient vector without computational graph
-            stopped_grads = 0
-            for data, target in tqdm(train_loader, desc="GraSP 1st loss calculation"):
-                data, target = data.to(device), target.to(device)
-                self.backbone.to(device)
-                output = self.backbone(data) / temp
-                L = F.cross_entropy(output, target)
+                    grads = torch.autograd.grad(L, [param for _, param in self.backbone.named_parameters()], create_graph=True)
+                    flatten_grads = torch.cat([g.reshape(-1) for g in grads if g is not None])
+
+                    gnorm = (stopped_grads * flatten_grads).sum()
+                    gnorm.backward()
+
+                # Calculate the score
+                for name1, module in (self.backbone.named_modules()):
+                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                        for name2, param in (module.named_parameters(recurse=False)):
+                            key = name1 + '.' + name2
+                            # Assign scores to the respective parameters here
+                            self.pruning_mask[key] = torch.clone(param.grad.cpu() * param.cpu()).detach()
+                            # Set gradients to zero
+                            param.grad.data.zero_()
+                    else:
+                        for name2, param in (module.named_parameters(recurse=False)):
+                            param.grad.data.zero_()
+
+                # Normalize the gradients
+                all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
+                norm = torch.sum(all_scores)
+                for keys in self.pruning_mask.keys():
+                    self.pruning_mask[keys].div_(norm)
+                # ipdb.set_trace()
+
+            elif self.pruner.lower() == "synflow":
+                """
+                As far as I'm concerned, SynFlow is multi-schedule Pruning method;
+                This means that pruning is done not only once, but multiple times concurrently for 200 epochs
+                """
+
+                # Assign parameters to its absolute value and save the signs in a dict "sign".
+                @torch.no_grad()
+                def linearize(model):
+                    signs = {}
+                    for name, param in model.state_dict().items():
+                        signs[name] = torch.sign(param)
+                        param.abs_()
+                    return signs
                 
-                grads = torch.autograd.grad(L, [param for _, param in self.backbone.named_parameters()], create_graph=False)
-                flatten_grads = torch.cat([g.reshape(-1) for g in grads if g is not None])
-                stopped_grads += flatten_grads
+                # Restore the sign parameters into the distilled params
+                @torch.no_grad()
+                def nonlinearlize(model, signs):
+                    for name, param in model.state_dict().items():
+                        param.mul_(signs[name].cpu())
 
-            # Next, evaluate gradient vector with computational graph
-            for data, target in tqdm(train_loader, desc="GraSP 2nd loss calculation"):
-                data, target = data.to(device), target.to(device)
+                signs = linearize(self.backbone)
+
+                # Pruning gradually by 200 epochs and exponential scheduler
+                prune_epochs = 200
+                ######################################################################
+                (data, _) = next(iter(train_loader))
+                input_dim = list(data[0,:].shape)
+                input = torch.ones([1] + input_dim).to(device)
                 self.backbone.to(device)
-                output = self.backbone(data) / temp
-                L = F.cross_entropy(output, target)
+                
+                # Save the model's original state
+                original_state = deepcopy(self.backbone.state_dict())
 
-                grads = torch.autograd.grad(L, [param for _, param in self.backbone.named_parameters()], create_graph=True)
-                flatten_grads = torch.cat([g.reshape(-1) for g in grads if g is not None])
+                for epoch in range(prune_epochs):
+                    # Check if pruning mask is empty or not
+                    if self.pruning_mask:
+                        # Generate the mask obtained through global thresholding
+                        sparseness = self.sparsity**((epoch + 1) / prune_epochs)
+                        global_scores = torch.cat([torch.flatten(self.pruning_mask[v]) for v in self.pruning_mask])
+                        k = int((1.0 - sparseness) * global_scores.numel())
+                        if not k < 1:
+                            threshold, _ = torch.kthvalue(torch.flatten(global_scores), k)
+                            for name1, module in (self.backbone.named_modules()):
+                                if isinstance(module, (nn.Conv2d, nn.Linear)):
+                                    # Iterate through parameters in prunable modules.
+                                    for name2, param in module.named_parameters(recurse=False):
+                                        key = name1 + '.' + name2
+                                        score = self.pruning_mask[key]
+                                        # Now, set parameters to be pruned and one that should be left as it is
+                                        self.pruning_mask[key] = torch.where(score <= threshold, 0, 1)
+                        # Apply the generated mask towards the backbone
+                        for module_name, param in self.backbone.named_parameters():
+                            if module_name in self.pruning_mask.keys():
+                                param.data = self.pruning_mask[module_name].to(param.data.get_device()) * param.data
 
-                gnorm = (stopped_grads * flatten_grads).sum()
-                gnorm.backward()
+                    # Now, apply the backbone masking around here
+                    output = self.backbone(input)
+                    torch.sum(output).backward()
 
-            # Calculate the score
-            for name1, module in (self.backbone.named_modules()):
-                if isinstance(module, (nn.Conv2d, nn.Linear)):
-                    for name2, param in (module.named_parameters(recurse=False)):
-                        key = name1 + '.' + name2
-                        # Assign scores to the respective parameters here
-                        self.pruning_mask[key] = torch.clone(param.grad.cpu() * param.cpu()).detach()
-                        # Set gradients to zero
-                        param.grad.data.zero_()
-                else:
-                    for name2, param in (module.named_parameters(recurse=False)):
-                        param.grad.data.zero_()
+                    # Calculate the score
+                    for name1, module in (self.backbone.named_modules()):
+                        if isinstance(module, (nn.Conv2d, nn.Linear)):
+                            for name2, param in (module.named_parameters(recurse=False)):
+                                key = name1 + '.' + name2
+                                # Assign scores to the respective parameters here
+                                self.pruning_mask[key] = torch.clone(param.grad.cpu() * param.cpu()).detach().abs_()
+                                # Set gradients to zero
+                                param.grad.data.zero_()
+                        else:
+                            for name2, param in (module.named_parameters(recurse=False)):
+                                param.grad.data.zero_()
 
-            # Normalize the gradients
-            all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
-            norm = torch.sum(all_scores)
-            for keys in self.pruning_mask.keys():
-                self.pruning_mask[keys].div_(norm)
-            ipdb.set_trace()
+                ######################################################################
 
-        elif self.pruner.lower() == "synflow":
-            pass
-        elif self.pruner.lower() in ["rand","mag"]:
-            # Iterate through modules in backbone
-            for name1, module in (self.backbone.named_modules()):
-                ## Proceed if the module within this specific network is prunable (conv2d, linear)
-                if isinstance(module, (nn.Conv2d, nn.Linear)):
-                    ## Iterate through paramaters in prunable modules.
-                    for name2, param in module.named_parameters(recurse=False):
-                        # Create masks for each one of them
-                        key = name1 + '.' + name2
-                        self.pruning_mask[key] = param
-                        ## Now that we successfully masked each one of them, it's time to score parameters
-                        ## (1) This one is for rand pruning
-                        if self.pruner.lower() == "rand":
-                            self.pruning_mask[key] = torch.randn_like(self.pruning_mask[key])
-                        ## (2) This one is for magnitude pruning (essentially, return the absolute value of the magnitude)
-                        elif self.pruner.lower() == "mag":
-                            self.pruning_mask[key] = torch.clone(self.pruning_mask[key]).detach().abs_()
-        else:
-            raise ValueError(f'{self.pruner} not in (rand, mag, snip, grasp, synflow)')
+                # Revert back to the original state
+                self.backbone.load_state_dict(deepcopy(original_state))
+                # Multiply the originally saved state onto the current state
+                nonlinearlize(self.backbone, signs)
+                
+            elif self.pruner.lower() in ["rand","mag"]:
+                # Iterate through modules in backbone
+                for name1, module in (self.backbone.named_modules()):
+                    ## Proceed if the module within this specific network is prunable (conv2d, linear)
+                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                        ## Iterate through paramaters in prunable modules.
+                        for name2, param in module.named_parameters(recurse=False):
+                            # Create masks for each one of them
+                            key = name1 + '.' + name2
+                            self.pruning_mask[key] = param
+                            ## Now that we successfully masked each one of them, it's time to score parameters
+                            ## (1) This one is for rand pruning
+                            if self.pruner.lower() == "rand":
+                                self.pruning_mask[key] = torch.randn_like(self.pruning_mask[key])
+                            ## (2) This one is for magnitude pruning (essentially, return the absolute value of the magnitude)
+                            elif self.pruner.lower() == "mag":
+                                self.pruning_mask[key] = torch.clone(self.pruning_mask[key]).detach().abs_()
+            else:
+                raise ValueError(f'{self.pruner} not in (rand, mag, snip, grasp, synflow)')
 
-        ### Now, perform thresholding towards the parameters' score.
-        for name1, module in (self.backbone.named_modules()):
-            ## Proceed if the module within this specific network is prunable (conv2d, linear)
-            if isinstance(module, (nn.Conv2d, nn.Linear)):
-                ## Iterate through paramaters in prunable modules.
-                for name2, param in module.named_parameters(recurse=False):
-                    ## This is for layer-wise pruning
-                    key = name1 + '.' + name2
-                    score = self.pruning_mask[key]
-                    ## This one is for global pruning
-                    # score = torch.cat([torch.flatten(pruning_mask[v]) for v in pruning_mask])
-                    ## Lets do layer-wise pruning for the time-being
-                    k = int((1.0 - self.sparsity) * score.numel())
-                    if not k < 1:
-                        ## Perform thresholding under the sane case
-                        threshold, _ = torch.kthvalue(torch.flatten(score), k)
-                        ## Now, set parameters to be pruned and one that should be left as it is
-                        self.pruning_mask[key] = torch.where(score <= threshold, 0, 1)
-        print("\nPruning finished!\n")
+            ### Now, perform thresholding towards the parameters' score.
+            
+            ## This is for layer-wise pruning
+            if self.scope.lower() == "layer":
+                for name1, module in (self.backbone.named_modules()):
+                    ## Proceed if the module within this specific network is prunable (conv2d, linear)
+                    if isinstance(module, (nn.Conv2d, nn.Linear)):
+                        ## Iterate through paramaters in prunable modules.
+                        for name2, param in module.named_parameters(recurse=False):
+                            key = name1 + '.' + name2
+                            score = self.pruning_mask[key]
+                            k = int((1.0 - self.sparsity) * score.numel())
+                            if not k < 1:
+                                ## Perform thresholding under the sane case
+                                threshold, _ = torch.kthvalue(torch.flatten(score), k)
+                                ## Now, set parameters to be pruned and one that should be left as it is
+                                self.pruning_mask[key] = torch.where(score <= threshold, 0, 1)
+
+            ## This is for global-wise pruning (Default Case)
+            elif self.scope.lower() == "global":
+                global_scores = torch.cat([torch.flatten(self.pruning_mask[v]) for v in self.pruning_mask])
+                # Find the threshold of pruning
+                k = int((1.0 - self.sparsity) * global_scores.numel())
+                if not k < 1:
+                    threshold, _ = torch.kthvalue(torch.flatten(global_scores), k)
+                    for name1, module in (self.backbone.named_modules()):
+                        if isinstance(module, (nn.Conv2d, nn.Linear)):
+                            # Iterate through parameters in prunable modules.
+                            for name2, param in module.named_parameters(recurse=False):
+                                key = name1 + '.' + name2
+                                score = self.pruning_mask[key]
+                                # Now, set parameters to be pruned and one that should be left as it is
+                                self.pruning_mask[key] = torch.where(score <= threshold, 0, 1)
+                                
+                ipdb.set_trace()
+            print("\nPruning finished!\n")
 
         if self.knn_eval:
             self.knn = WeightedKNNClassifier(k=self.knn_k, distance_fx="euclidean")
@@ -509,6 +610,12 @@ class BaseSupervisedMethod(pl.LightningModule):
         ]
         parser.add_argument("--pruner", choices=SUPPORTED_PRUNERS, type=str, default="none")
         parser.add_argument("--sparsity", default=0.1, type=float)
+
+        SUPPORTED_SCOPES = [
+            "global",
+            "layer"
+        ]
+        parser.add_argument("--scope", choices=SUPPORTED_SCOPES, type=str, default="global")
 
         return parent_parser
 
@@ -670,11 +777,7 @@ class BaseSupervisedMethod(pl.LightningModule):
         """
         for module_name, param in self.backbone.named_parameters():
             if module_name in self.pruning_mask.keys():
-                # elem += torch.numel(param)
-                # print("Total number of parameters BEFORE PRUNING: {}".format(elem))
                 param.data = self.pruning_mask[module_name].to(param.data.get_device()) * param.data
-                # nonzero_elem += torch.count_nonzero(param).item()
-                # print("Total number of parameters AFTER PRUNING: {}".format(nonzero_elem))
         ############### 
         feats = self.backbone(X)
         # logits = self.classifier(feats.detach())
