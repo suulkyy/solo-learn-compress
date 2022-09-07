@@ -301,7 +301,7 @@ class BaseSupervisedMethod(pl.LightningModule):
                 batch_size=256,
                 download=False,
                 )
-            device = torch.device("cuda:2")
+            device = torch.device("cuda:7")
             self.backbone.eval()
             # Perform all the gradient calculation here (if necessary!)
             if self.pruner.lower() == "snip":
