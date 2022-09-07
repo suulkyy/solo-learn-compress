@@ -301,7 +301,7 @@ class BaseSupervisedMethod(pl.LightningModule):
                 batch_size=256,
                 download=False,
                 )
-            device = torch.device("cuda:1")
+            device = torch.device("cuda:2")
             self.backbone.eval()
             # Perform all the gradient calculation here (if necessary!)
             if self.pruner.lower() == "snip":
@@ -399,7 +399,7 @@ class BaseSupervisedMethod(pl.LightningModule):
                 @torch.no_grad()
                 def nonlinearlize(model, signs):
                     for name, param in model.state_dict().items():
-                        param.mul_(signs[name].cpu())
+                        param.mul_(signs[name])
 
                 signs = linearize(self.backbone)
 
@@ -457,6 +457,7 @@ class BaseSupervisedMethod(pl.LightningModule):
 
                 # Revert back to the original state
                 self.backbone.load_state_dict(deepcopy(original_state))
+                self.backbone.to("cpu")
                 # Multiply the originally saved state onto the current state
                 nonlinearlize(self.backbone, signs)
                 
@@ -514,7 +515,6 @@ class BaseSupervisedMethod(pl.LightningModule):
                                 # Now, set parameters to be pruned and one that should be left as it is
                                 self.pruning_mask[key] = torch.where(score <= threshold, 0, 1)
                                 
-                ipdb.set_trace()
             print("\nPruning finished!\n")
 
         if self.knn_eval:
