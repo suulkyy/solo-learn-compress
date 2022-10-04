@@ -294,7 +294,7 @@ class BaseMethod(pl.LightningModule):
                 batch_size=256,
                 download=False,
                 )
-            device = torch.device("cuda:1")
+            device = torch.device("cuda:7")
             self.backbone.eval()
             # Perform all the gradient calculation here (if necessary!)
             if self.pruner.lower() == "snip":
@@ -319,13 +319,12 @@ class BaseMethod(pl.LightningModule):
                             key = name1 + '.' + name2
                             # Set gradients to zero
                             param.grad.data.zero_()
-
                 # Normalize the gradients
                 all_scores = torch.cat([torch.flatten(v) for v in self.pruning_mask.values()])
                 norm = torch.sum(all_scores)
                 for keys in self.pruning_mask.keys():
                     self.pruning_mask[keys].div_(norm)
-
+                # ipdb.set_trace()
             elif self.pruner.lower() == "grasp":
                 temp, eps = 200, 1e-10
                 # First, evaluate gradient vector without computational graph
@@ -371,7 +370,6 @@ class BaseMethod(pl.LightningModule):
                 norm = torch.sum(all_scores)
                 for keys in self.pruning_mask.keys():
                     self.pruning_mask[keys].div_(norm)
-                # ipdb.set_trace()
 
             elif self.pruner.lower() == "synflow":
                 """
@@ -453,6 +451,7 @@ class BaseMethod(pl.LightningModule):
                 self.backbone.to("cpu")
                 # Multiply the originally saved state onto the current state
                 nonlinearlize(self.backbone, signs)
+                # ipdb.set_trace()
                 
             elif self.pruner.lower() in ["rand","mag"]:
                 # Iterate through modules in backbone

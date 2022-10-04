@@ -299,7 +299,7 @@ class BaseSupervisedMethod(pl.LightningModule):
                 batch_size=256,
                 download=False,
                 )
-            device = torch.device("cuda:7")
+            device = torch.device("cuda:1")
             self.backbone.eval()
             # Perform all the gradient calculation here (if necessary!)
             if self.pruner.lower() == "snip":
@@ -330,7 +330,7 @@ class BaseSupervisedMethod(pl.LightningModule):
                 norm = torch.sum(all_scores)
                 for keys in self.pruning_mask.keys():
                     self.pruning_mask[keys].div_(norm)
-
+                # ipdb.set_trace()
             elif self.pruner.lower() == "grasp":
                 temp, eps = 200, 1e-10
                 # First, evaluate gradient vector without computational graph
