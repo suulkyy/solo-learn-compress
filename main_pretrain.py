@@ -58,6 +58,7 @@ import ipdb
 
 
 def main():
+    # Change global seed
     seed_everything(5)
 
     args = parse_args_pretrain()
