@@ -3,7 +3,7 @@ python3 ../../../main_pretrain.py \
     --backbone resnet18 \
     --data_dir ~/workspace/datasets/ \
     --max_epochs 200 \
-    --gpus 1 \
+    --gpus 4 \
     --accelerator gpu \
     --precision 16 \
     --optimizer sgd \
@@ -25,15 +25,15 @@ python3 ../../../main_pretrain.py \
     --gaussian_prob 0.0 0.0 \
     --crop_size 32 \
     --num_crops_per_aug 1 1 \
-    --name res18_supervised_random_pruning_0.000001 \
-    --sparsity 0.000001 \
-    --project CIFAR100-supervised-200ep \
+    --name simclr_res18_synflow_pruning_0.05 \
+    --project CIFAR100-simclr-200ep \
     --entity kaistaim2 \
+    --pruner synflow \
+    --sparsity 0.05 \
     --wandb \
     --save_checkpoint \
-    --method simclrsupervised \
+    --method simclr \
     --temperature 0.2 \
     --proj_hidden_dim 2048 \
     --proj_output_dim 256 \
     --knn_eval \
-    --pruner rand \

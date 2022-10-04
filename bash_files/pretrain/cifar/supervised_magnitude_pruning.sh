@@ -25,7 +25,7 @@ python3 ../../../main_pretrain.py \
     --gaussian_prob 0.0 0.0 \
     --crop_size 32 \
     --num_crops_per_aug 1 1 \
-    --name res18_supervised_magnitude_pruning_0.1_new \
+    --name res18_supervised_magnitude_pruning_0.1 \
     --sparsity 0.1 \
     --project CIFAR100-supervised-200ep \
     --entity kaistaim2 \

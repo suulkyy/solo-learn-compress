@@ -2,8 +2,8 @@ python3 ../../../main_pretrain.py \
     --dataset cifar100 \
     --backbone resnet18 \
     --data_dir ~/workspace/datasets/ \
-    --max_epochs 200 \
-    --gpus 1 \
+    --max_epochs 1000 \
+    --gpus 3 \
     --accelerator gpu \
     --precision 16 \
     --optimizer sgd \
@@ -25,9 +25,9 @@ python3 ../../../main_pretrain.py \
     --gaussian_prob 0.0 0.0 \
     --crop_size 32 \
     --num_crops_per_aug 1 1 \
-    --name res18_supervised_random_pruning_0.000001 \
-    --sparsity 0.000001 \
-    --project CIFAR100-supervised-200ep \
+    --name res18_supervised_magnitude_pruning_0.01 \
+    --sparsity 0.01 \
+    --project CIFAR100-supervised-1000ep \
     --entity kaistaim2 \
     --wandb \
     --save_checkpoint \
@@ -36,4 +36,4 @@ python3 ../../../main_pretrain.py \
     --proj_hidden_dim 2048 \
     --proj_output_dim 256 \
     --knn_eval \
-    --pruner rand \
+    --pruner mag \
