@@ -287,15 +287,14 @@ class BaseMethod(pl.LightningModule):
             """
             # Dataloader initialization (the one for gradient-based methods!)
             train_loader, val_loader = prepare_data_classification(
-                dataset="cifar100",
+                dataset="stl10",
                 # data_dir="~/workspace/datasets/"
-                train_dir="../../../datasets/cifar100/train",
-                val_dir="../../../datasets/cifar100/val",
+                train_dir="../../../datasets/stl10/train",
+                val_dir="../../../datasets/stl10/val",
                 batch_size=256,
-                download=False,
+                download=True,
                 )
-            device = torch.device("cuda:7")
-            self.backbone.eval()
+            device = torch.device("cuda:6")
             # Perform all the gradient calculation here (if necessary!)
             if self.pruner.lower() == "snip":
                 ## Compute gradient
@@ -374,9 +373,8 @@ class BaseMethod(pl.LightningModule):
             elif self.pruner.lower() == "synflow":
                 """
                 As far as I'm concerned, SynFlow is multi-schedule Pruning method;
-                This means that pruning is done not only once, but multiple times concurrently for 200 epochs
+                This means that pruning is done not only once, but multiple times concurrently for 100 epochs
                 """
-
                 # Assign parameters to its absolute value and save the signs in a dict "sign".
                 @torch.no_grad()
                 def linearize(model):
@@ -392,10 +390,11 @@ class BaseMethod(pl.LightningModule):
                     for name, param in model.state_dict().items():
                         param.mul_(signs[name])
 
+                self.backbone.eval()
                 signs = linearize(self.backbone)
 
-                # Pruning gradually by 200 epochs and exponential scheduler
-                prune_epochs = 200
+                # Pruning gradually by 100 epochs and exponential scheduler
+                prune_epochs = 100
                 ######################################################################
                 (data, _) = next(iter(train_loader))
                 input_dim = list(data[0,:].shape)
